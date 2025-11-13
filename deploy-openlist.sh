@@ -15,7 +15,7 @@ NC='\033[0m' # No Color
 DEFAULT_NETWORK="xifan"
 DEFAULT_SUBNET="10.0.0.1/16"
 DEFAULT_IP_START=10
-DEFAULT_PORT_START=3000
+DEFAULT_PORT_START=5244
 DEFAULT_USERNAME="admin"
 DEFAULT_PASSWORD="password"
 DEFAULT_TAG="latest"
@@ -86,16 +86,24 @@ find_available_ip() {
 
 # 函数：查找可用的端口
 find_available_port() {
-    # 获取 Docker 容器当前使用的最高端口
-    local max_port=$(docker ps --format '{{.Ports}}' | grep -oP '\d+(?=->)' | sort -n | tail -1)
+    # 获取所有已使用的端口，排序
+    local used_ports=$(docker ps --format '{{.Ports}}' | grep -oP '\d+(?=->)' | sort -n)
 
-    if [ -n "$max_port" ]; then
-        # 最高端口+1
-        echo $((max_port + 1))
-    else
-        # 没有容器运行，使用默认起始端口
-        echo "$DEFAULT_PORT_START"
-    fi
+    # 从默认起始端口开始查找第一个未使用的端口
+    local test_port=$DEFAULT_PORT_START
+    while true; do
+        if ! echo "$used_ports" | grep -q "^${test_port}$"; then
+            echo "$test_port"
+            return
+        fi
+        test_port=$((test_port + 1))
+
+        # 安全上限
+        if [ $test_port -gt 65535 ]; then
+            log_error "无可用端口"
+            exit 1
+        fi
+    done
 }
 
 # 函数：部署 OpenList 容器
@@ -120,15 +128,14 @@ deploy_openlist() {
     # 创建数据目录
     mkdir -p "$data_path"
 
-    # 启动容器
+    # 启动容器（使用当前用户运行，避免权限问题）
     docker run -d \
         --name "$container_name" \
+        --user $(id -u):$(id -g) \
         --network "$network" \
         --ip "$ip" \
         -p "${port}:5244" \
-        -v "${data_path}:/opt/alist/data" \
-        -e PUID=0 \
-        -e PGID=0 \
+        -v "${data_path}:/opt/openlist/data" \
         -e UMASK=022 \
         --restart unless-stopped \
         "${OPENLIST_IMAGE}:${image_tag}"
